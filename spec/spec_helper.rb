@@ -1,5 +1,14 @@
 # frozen_string_literal: true
 
+# SimpleCov must start before requiring the gem so its methods are instrumented.
+unless ENV["SIWE_SKIP_COVERAGE"]
+  require "simplecov"
+  SimpleCov.start do
+    enable_coverage :branch
+    add_filter "/spec/"
+  end
+end
+
 require "json"
 require "siwe"
 

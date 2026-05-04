@@ -33,5 +33,16 @@ module Siwe
     def generate_nonce
       Util.generate_nonce
     end
+
+    # Top-level alias for Siwe::Message.parse — mirrors how the TS package
+    # exposes parsing at the package root.
+    def parse(str)
+      Message.parse(str)
+    end
+
+    # Top-level alias for Siwe::Eip6492.signature? — mirrors TS isEIP6492Signature.
+    def eip6492_signature?(hex)
+      Eip6492.signature?(hex)
+    end
   end
 end

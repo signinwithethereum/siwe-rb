@@ -23,7 +23,7 @@ Gem::Specification.new do |spec|
   spec.files = Dir.chdir(File.expand_path(__dir__)) do
     `git ls-files -z`.split("\x0").reject do |f|
       f == __FILE__ ||
-        f.start_with?("spec/", "test/", "features/", "bin/", "gems/") ||
+        f.start_with?("spec/", "test/", "features/", "bin/", "gems/", "script/") ||
         f.match?(/\A\.(?:git|github|rubocop|ruby-version|rspec)/)
     end
   end

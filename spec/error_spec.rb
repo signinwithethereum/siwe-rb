@@ -39,6 +39,22 @@ RSpec.describe Siwe::Error do
   end
 end
 
+RSpec.describe "Siwe top-level helpers" do
+  it "Siwe.parse delegates to Siwe::Message.parse" do
+    text = "example.com wants you to sign in with your Ethereum account:\n" \
+           "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\n\n" \
+           "URI: https://example.com\nVersion: 1\nChain ID: 1\n" \
+           "Nonce: abcd1234\nIssued At: 2024-01-01T00:00:00Z"
+    expect(Siwe.parse(text)).to eq(Siwe::Message.parse(text))
+  end
+
+  it "Siwe.eip6492_signature? delegates to Siwe::Eip6492.signature?" do
+    sig = "0xdeadbeef#{Siwe::Eip6492::MAGIC_SUFFIX}"
+    expect(Siwe.eip6492_signature?(sig)).to be(true)
+    expect(Siwe.eip6492_signature?("0xdeadbeef")).to be(false)
+  end
+end
+
 RSpec.describe Siwe::ErrorType do
   it "defines 27 error types" do
     expect(described_class::ALL.length).to eq(27)

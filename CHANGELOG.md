@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2] — 2026-05-04
+
+- Add top-level convenience methods `Siwe.parse(str)` (alias for `Siwe::Message.parse`) and `Siwe.eip6492_signature?(hex)` (alias for `Siwe::Eip6492.signature?`), mirroring the TS package's root-level exports.
+- New CI `package` job: builds and installs the gem from a `.gem` file, then runs `script/smoke_test.rb` in a fresh Ruby process. Catches packaging issues (missing files, autoload typos) that in-tree specs miss.
+- Wire up SimpleCov in `spec_helper.rb` (branch coverage enabled). Set `SIWE_SKIP_COVERAGE=1` to disable.
+- Bump GitHub Actions `actions/checkout` v4 → v5 to silence Node.js 20 deprecation warnings.
+- Update gemspec author metadata.
+
 ## [0.1.1] — 2026-05-04
 
 - Bump minimum Ruby to 3.3. RuboCop's transitive dep `parallel` 2.1+ requires Ruby ≥ 3.3, so 3.2 can no longer pass the gem's own CI; Ruby 3.2 went EOL in March 2026 anyway. Runtime users on 3.2 can stay on 0.1.0 — the only runtime dep (`eth`) still supports 3.2.
