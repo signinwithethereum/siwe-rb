@@ -15,7 +15,7 @@ gem "siwe-rb", "~> 0.1"
 require "siwe"
 ```
 
-Requires Ruby ≥ 3.2.
+Requires Ruby ≥ 3.3.
 
 ## Usage
 
@@ -125,6 +125,7 @@ The full set of error types mirrors `SiweErrorType` in the TypeScript reference 
 | EIP-6492 verification              | ✓ (via viem)  | ✓ (built-in)   |
 | Pluggable provider                 | viem / ethers | duck-typed RPC |
 | Shared test-vector suite           | ✓             | ✓              |
+| CI matrix                          | -             | Ruby 3.3 / 3.4 |
 
 ## Development
 

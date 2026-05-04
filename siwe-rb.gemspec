@@ -13,7 +13,7 @@ Gem::Specification.new do |spec|
                      "with built-in support for ERC-1271 and EIP-6492 smart contract wallets."
   spec.homepage    = "https://github.com/signinwithethereum/siwe-rb"
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.2"
+  spec.required_ruby_version = ">= 3.3"
 
   spec.metadata["homepage_uri"] = spec.homepage
   spec.metadata["source_code_uri"] = spec.homepage
