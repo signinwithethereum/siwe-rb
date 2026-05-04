@@ -5,8 +5,8 @@ require_relative "lib/siwe/version"
 Gem::Specification.new do |spec|
   spec.name    = "siwe-rb"
   spec.version = Siwe::VERSION
-  spec.authors = ["1001 Digital"]
-  spec.email   = ["jalil@1001.digital"]
+  spec.authors = ["EthID.org"]
+  spec.email   = ["jalil@ethfollow.xyz"]
 
   spec.summary = "Sign-In with Ethereum (EIP-4361) for Ruby"
   spec.description = "EIP-4361 message construction, parsing, and signature verification, " \
