@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.1] — 2026-05-04
+
+- Bump minimum Ruby to 3.3. RuboCop's transitive dep `parallel` 2.1+ requires Ruby ≥ 3.3, so 3.2 can no longer pass the gem's own CI; Ruby 3.2 went EOL in March 2026 anyway. Runtime users on 3.2 can stay on 0.1.0 — the only runtime dep (`eth`) still supports 3.2.
+- CI matrix dropped 3.2; now runs on Ruby 3.3 and 3.4.
+
 ## [0.1.0] — 2026-05-04
 
 Initial release of `siwe-rb`. Hard fork of the abandoned `siwe` gem (last published 0.1.0, 2021).
