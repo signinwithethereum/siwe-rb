@@ -50,7 +50,7 @@ jobs:
       - name: Build gem
         run: gem build siwe-rb.gemspec
       - name: Install gem
-        run: gem install --local siwe-rb-*.gem
+        run: gem install siwe-rb-*.gem
       - name: Smoke test
         run: ruby script/smoke_test.rb
 
