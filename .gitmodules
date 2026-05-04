@@ -1,0 +1,3 @@
+[submodule "spec/test-vectors"]
+	path = spec/test-vectors
+	url = https://github.com/signinwithethereum/test-vectors.git

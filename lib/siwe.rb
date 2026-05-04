@@ -2,22 +2,36 @@
 
 require_relative "siwe/version"
 
-# Main module of siwe
 module Siwe
-  autoload :Message, "siwe/message"
-  autoload :Util, "siwe/util"
-  autoload :ExpiredMessage, "siwe/exceptions"
-  autoload :InvalidDomain, "siwe/exceptions"
-  autoload :DomainMismatch, "siwe/exceptions"
-  autoload :NonceMismatch, "siwe/exceptions"
-  autoload :InvalidAddress, "siwe/exceptions"
-  autoload :InvalidURI, "siwe/exceptions"
-  autoload :InvalidNonce, "siwe/exceptions"
-  autoload :NotValidMessage, "siwe/exceptions"
-  autoload :InvalidTimeFormat, "siwe/exceptions"
-  autoload :InvalidMessageVersion, "siwe/exceptions"
-  autoload :InvalidSignature, "siwe/exceptions"
-  autoload :UnableToParseMessage, "siwe/exceptions"
+  autoload :Error,       "siwe/error"
+  autoload :ErrorType,   "siwe/error_type"
+  autoload :Response,    "siwe/response"
+  autoload :Util,        "siwe/util"
+  autoload :Parser,      "siwe/parser"
+  autoload :Message,     "siwe/message"
+  autoload :Config,      "siwe/config"
+  autoload :Adapter,     "siwe/adapter"
+  autoload :Rpc,         "siwe/rpc"
+  autoload :SmartWallet, "siwe/smart_wallet"
+  autoload :Eip6492,     "siwe/eip6492"
 
-  class Error < StandardError; end
+  class << self
+    def configure
+      builder = Config::Builder.new(**config.to_h)
+      yield(builder) if block_given?
+      @config = builder.build.freeze
+    end
+
+    def config
+      @config ||= Config.new.freeze
+    end
+
+    def reset_config!
+      @config = nil
+    end
+
+    def generate_nonce
+      Util.generate_nonce
+    end
+  end
 end

@@ -1,107 +1,142 @@
-# siwe-ruby
-A Ruby implementation of EIP-4361: Sign In With Ethereum.
+# siwe-rb
 
-## Getting started
-### Dependencies
-Additional packages may be required to install the gem:
+Sign-In with Ethereum (EIP-4361) for Ruby — message construction, parsing, and signature verification, with built-in support for ERC-1271 and EIP-6492 smart contract wallets.
 
-### macOS
-```bash
-brew install automake openssl libtool pkg-config gmp libffi
+`siwe-rb` is the Ruby companion to the [TypeScript](https://github.com/signinwithethereum/siwe), [Python](https://github.com/signinwithethereum/siwe-py), and [Rust](https://github.com/signinwithethereum/siwe-rs) implementations under the [@signinwithethereum](https://github.com/signinwithethereum) organisation. It runs against the same shared test-vector suite.
+
+## Installation
+
+```ruby
+# Gemfile
+gem "siwe-rb", "~> 0.1"
 ```
 
-### Linux
-```bash
-sudo apt-get install build-essential automake pkg-config libtool \
-                     libffi-dev libssl-dev libgmp-dev python-dev
+```ruby
+require "siwe"
 ```
 
-After installing any required dependencies SIWE can be easily installed with:
-```bash
-gem install siwe
-```
+Requires Ruby ≥ 3.2.
 
 ## Usage
-SIWE provides a Message class which implements EIP-4361.
-### Creating a SIWE Message
+
+### Construct and sign a message
 
 ```ruby
-require 'siwe'
-require 'time'
+require "siwe"
+require "eth"
 
-# Only the mandatory arguments
-Siwe::Message.new("domain.example", "0x9D85ca56217D2bb651b00f15e694EB7E713637D4", "some.uri", "1")
+key = Eth::Key.new
 
-# Complete SIWE message with default values
-Siwe::Message.new("domain.example", "0x9D85ca56217D2bb651b00f15e694EB7E713637D4", "some.uri", "1", {
-                                   issued_at: Time.now.utc.iso8601,
-                                   statement: "Example statement for SIWE",
-                                   nonce: Siwe::Util.generate_nonce,
-                                   chain_id: "1",
-                                   expiration_time: "",
-                                   not_before: "",
-                                   request_id: "",
-                                   resources: []
-                                 })
+message = Siwe::Message.new(
+  domain:     "example.com",
+  address:    key.address.to_s,
+  uri:        "https://example.com/login",
+  chain_id:   1,
+  nonce:      Siwe.generate_nonce,
+  issued_at:  Time.now.utc.iso8601,
+  statement:  "Sign in to example.com"
+)
+
+text      = message.prepare_message  # → EIP-4361 message string
+signature = key.personal_sign(text)
 ```
 
-### Parsing a SIWE Message
-To parse from EIP-4361 use `Siwe::Message.from_message`
+### Parse a message
 
 ```ruby
-require 'siwe'
-
-Siwe::Message.from_message "domain.example wants you to sign in with your Ethereum account:\n0x9D85ca56217D2bb651b00f15e694EB7E713637D4\n\nExample statement for SIWE\n\nURI: some.uri\nVersion: 1\nChain ID: 1\nNonce: k1Ne4KWzBHYEFQo8\nIssued At: 2022-02-03T20:06:19Z"
+message = Siwe::Message.parse(text)
+message.domain    # => "example.com"
+message.address   # => "0x..."
+message.warnings  # => [] (e.g. ["address is not EIP-55 checksummed - 0x…"])
 ```
 
-Messages can be parsed to and from JSON strings, using Siwe::Message.from_json_string and Siwe::Message.to_json_string respectively:
+### Verify a signature
+
+`verify` returns a `Siwe::Response`; `verify!` raises a `Siwe::Error` on failure.
 
 ```ruby
-require 'siwe'
+response = message.verify(
+  signature: signature,
+  domain:    "example.com",
+  nonce:     message.nonce
+)
 
-Siwe::Message.from_json_string "{\"domain\":\"domain.example\",\"address\":\"0x9D85ca56217D2bb651b00f15e694EB7E713637D4\",\"uri\":\"some.uri\",\"version\":\"1\",\"chain_id\":\"1\",\"nonce\":\"k1Ne4KWzBHYEFQo8\",\"issued_at\":\"2022-02-03T20:06:19Z\",\"statement\":\"Example statement for SIWE\",\"expiration_time\":\"\",\"not_before\":\"\",\"request_id\":\"\",\"resources\":[]}"
+if response.success?
+  # signed in
+else
+  Rails.logger.warn("siwe failed: #{response.error.type}")
+end
 
-Siwe::Message.new("domain.example", "0x9D85ca56217D2bb651b00f15e694EB7E713637D4", "some.uri", "1").to_json_string
+# or, idiomatic Ruby:
+message.verify!(signature: signature, domain: "example.com", nonce: message.nonce)
 ```
 
-## Verifying and Authenticating a SIWE Message
-Verification and authentication is performed via EIP-191, using the address field of the SiweMessage as the expected signer. The validate method checks message structural integrity, signature address validity, and time-based validity attributes.
+### Smart-wallet support (ERC-1271, EIP-6492)
+
+Configure an Ethereum RPC URL once at boot, and `verify` will automatically fall through to a single deploy-and-call against the EIP-6492 universal validator when EOA recovery fails. This handles both deployed ERC-1271 wallets (e.g. Safe) and counterfactual EIP-6492-wrapped signatures (e.g. Coinbase Smart Wallet) in one call.
+
+```ruby
+Siwe.configure do |c|
+  c.rpc_url = ENV["ETH_RPC_URL"]   # e.g. https://ethereum-rpc.publicnode.com
+end
+
+message.verify!(signature: sig, domain: "example.com", nonce: message.nonce)
+```
+
+You can also pass an RPC client per call, or inject your own client (anything responding to `eth_call(to:, data:, block:)`):
+
+```ruby
+custom_rpc = MyOwnRpcClient.new(...)
+config     = Siwe::Config.new(rpc: custom_rpc)
+message.verify!(signature: sig, domain: domain, nonce: nonce, config: config)
+```
+
+### Error handling
+
+All failures raise (or, for `verify`, surface as `response.error`) a single `Siwe::Error` carrying a `type` symbol from `Siwe::ErrorType`:
 
 ```ruby
 begin
-    message.verify(signature, domain, time, nonce) # returns true if valid throws otherwise
-rescue Siwe::ExpiredMessage
-    # Used when the message is already expired. (Expires At < Time.now)
-rescue Siwe::NotValidMessage
-    # Used when the message is not yet valid. (Not Before > Time.now)
-rescue Siwe::InvalidSignature
-    # Used when the signature doesn't correspond to the address of the message.
+  message.verify!(signature: sig, domain: domain, nonce: nonce)
+rescue Siwe::Error => e
+  case e.type
+  when :expired_message       then render_expired
+  when :nonce_mismatch        then render_replay
+  when :invalid_signature     then render_unauthorized
+  when :rpc_error             then retry_or_fail
+  else                             render_generic_error
+  end
 end
 ```
 
-## Serialization of a SIWE Message
-`Siwe::Message` instances can also be serialized as their EIP-4361 string representations via the `Siwe::Message.prepare_message` method:
+The full set of error types mirrors `SiweErrorType` in the TypeScript reference (27 codes including the Ruby-specific `:rpc_error`). See `lib/siwe/error_type.rb`.
 
-```ruby
-require 'siwe'
+## Comparison with the TypeScript implementation
 
-Siwe::Message.new("domain.example", "0x9D85ca56217D2bb651b00f15e694EB7E713637D4", "some.uri", "1").prepare_message
+| Feature                            | TS            | Ruby           |
+| ---------------------------------- | ------------- | -------------- |
+| EIP-4361 v1 parsing & rendering    | ✓             | ✓              |
+| Optional `scheme` field            | ✓             | ✓              |
+| EIP-55 checksum + warning          | ✓             | ✓              |
+| 17-char alphanumeric nonce         | ✓             | ✓              |
+| `verify` / response object         | Promise       | sync `Response`|
+| EOA verification                   | ✓             | ✓              |
+| ERC-1271 verification              | ✓ (via viem)  | ✓ (built-in)   |
+| EIP-6492 verification              | ✓ (via viem)  | ✓ (built-in)   |
+| Pluggable provider                 | viem / ethers | duck-typed RPC |
+| Shared test-vector suite           | ✓             | ✓              |
+
+## Development
+
+```bash
+git submodule update --init    # pulls in the shared test-vectors repo
+bundle install
+bundle exec rake               # runs rspec + rubocop
+
+# Live RPC integration tests (Argent, Loopring, EIP-6492 universal validator):
+SIWE_RPC_URL=https://ethereum-rpc.publicnode.com bundle exec rspec --tag live_rpc
 ```
 
-## Example
-Parsing and verifying a `Siwe::Message`:
-```ruby
-require 'siwe'
+## License
 
-begin
-  message = Siwe::Message.from_message "login.xyz wants you to sign in with your Ethereum account:\n0x9D85ca56217D2bb651b00f15e694EB7E713637D4\n\nSign-In With Ethereum Example Statement\n\nURI: https://login.xyz\nVersion: 1\nChain ID: 1\nNonce: bTyXgcQxn2htgkjJn\nIssued At: 2022-01-27T17:09:38.578Z\nExpiration Time: 2100-01-07T14:31:43.952Z"
-  message.verify("0xdc35c7f8ba2720df052e0092556456127f00f7707eaa8e3bbff7e56774e7f2e05a093cfc9e02964c33d86e8e066e221b7d153d27e5a2e97ccd5ca7d3f2ce06cb1b", "login.xyz", "2022-01-27T17:10:00Z", "bTyXgcQxn2htgkjJn")
-    puts "Congrats, your message is valid"
-rescue Siwe::ExpiredMessage
-    # Used when the message is already expired. (Expires At < Time.now)
-rescue Siwe::NotValidMessage
-    # Used when the message is not yet valid. (Not Before > Time.now)
-rescue Siwe::InvalidSignature
-    # Used when the signature doesn't correspond to the address of the message.
-end
-```
+MIT or Apache-2.0, at your option.

@@ -1,262 +1,276 @@
 # frozen_string_literal: true
 
-require "time"
-require "eth"
 require "json"
+require "time"
 
-DOMAIN = %r{(?<domain>[^/?#]+)}.freeze
-SIWE_DOMAIN = %r{^#{DOMAIN.source} wants you to sign in with your Ethereum account:}.freeze
+require_relative "error"
+require_relative "error_type"
+require_relative "parser"
+require_relative "response"
+require_relative "util"
 
-SIWE_ADDRESS = %r{\n(?<address>0x[a-zA-Z0-9]{40})\n\n}.freeze
-SIWE_STATEMENT = %r{((?<statement>[^\n]+)\n)?}.freeze
-RFC3986 = %r{(([^:?#]+):)?(([^?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?}.freeze
-SIWE_URI_LINE = %r{\nURI: (?<uri>#{RFC3986.source}?)}.freeze
-SIWE_VERSION = %r{\nVersion: (?<version>1)}.freeze
-SIWE_CHAIN_ID = %r{\nChain ID: (?<chain_id>[0-9]+)}.freeze
-SIWE_NONCE = %r{\nNonce: (?<nonce>[a-zA-Z0-9]{8,})}.freeze
-SIWE_DATETIME = %r{([0-9]+)-(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])[Tt]([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9]|60)(\.[0-9]+)?(([Zz])|([+|\-]([01][0-9]|2[0-3]):[0-5][0-9]))}.freeze
-SIWE_ISSUED_AT = %r{\nIssued At: (?<issued_at>#{SIWE_DATETIME.source})}.freeze
-SIWE_EXPIRATION_TIME = %r{(\nExpiration Time: (?<expiration_time>#{SIWE_DATETIME.source}))?}.freeze
-SIWE_NOT_BEFORE = %r{(\nNot Before: (?<not_before>#{SIWE_DATETIME.source}))?}.freeze
-SIWE_REQUEST_ID = %r{(\nRequest ID: (?<request_id>[-._~!$&'()*+,;=:@%a-zA-Z0-9]*))?}.freeze
-SIWE_RESOURCES = %r{(\nResources:(?<resources>(\n- #{RFC3986.source}?)+))?$}.freeze
-
-SIWE_MESSAGE = Regexp.new(SIWE_DOMAIN.source + SIWE_ADDRESS.source + SIWE_STATEMENT.source + SIWE_URI_LINE.source +
-                          SIWE_VERSION.source + SIWE_CHAIN_ID.source + SIWE_NONCE.source + SIWE_ISSUED_AT.source +
-                          SIWE_EXPIRATION_TIME.source + SIWE_NOT_BEFORE.source + SIWE_REQUEST_ID.source +
-                          SIWE_RESOURCES.source)
 module Siwe
-  # Class that defines the EIP-4361 message fields and some utility methods to
-  # generate/validate the messages
+  # An EIP-4361 Sign-In with Ethereum message.
+  # Construct via `Siwe::Message.new(**fields)` or parse via `Siwe::Message.parse(string)`.
+  # Render via `#prepare_message` (alias `#to_eip4361`, `#to_s`).
   class Message
-    # RFC 4501 dns authority that is requesting the signing.
-    attr_accessor :domain
+    FIELDS = %i[
+      scheme domain address statement uri version chain_id nonce
+      issued_at expiration_time not_before request_id resources
+    ].freeze
 
-    # Ethereum address performing the signing conformant to capitalization
-    # encoded checksum specified in EIP-55 where applicable.
-    attr_accessor :address
+    attr_reader(*FIELDS, :warnings)
 
-    # RFC 3986 URI referring to the resource that is the subject of the signing
-    # (as in the __subject__ of a claim).
-    attr_accessor :uri
+    def self.parse(str)
+      result = Parser.parse(str)
+      msg = allocate
+      msg.send(:init_from_parser, result)
+      msg
+    end
 
-    # Current version of the message.
-    attr_accessor :version
+    def self.from_json(json_str)
+      data = JSON.parse(json_str, symbolize_names: true)
+      new(**data.slice(*FIELDS))
+    rescue JSON::ParserError => e
+      raise Error.new(ErrorType::UNABLE_TO_PARSE, message: "Invalid JSON: #{e.message}")
+    end
 
-    # EIP-155 Chain ID to which the session is bound, and the network where
-    # Contract Accounts must be resolved.
-    attr_accessor :chain_id
-
-    # Randomized token used to prevent replay attacks, at least 8 alphanumeric
-    # characters.
-    attr_accessor :nonce
-
-    # ISO 8601 datetime string of the current time.
-    attr_accessor :issued_at
-
-    # Human-readable ASCII assertion that the user will sign, and it must not
-    # contain `\n`.
-    attr_accessor :statement
-
-    # ISO 8601 datetime string that, if present, indicates when the signed
-    # authentication message is no longer valid.
-    attr_accessor :expiration_time
-
-    # ISO 8601 datetime string that, if present, indicates when the signed
-    # authentication message will become valid.
-    attr_accessor :not_before
-
-    # System-specific identifier that may be used to uniquely refer to the
-    # sign-in request.
-    attr_accessor :request_id
-
-    # List of information or references to information the user wishes to have
-    # resolved as part of authentication by the relying party. They are
-    # expressed as RFC 3986 URIs separated by `\n- `.
-    attr_accessor :resources
-
-    def initialize(domain, address, uri, version, options = {})
+    def initialize(domain:, address:, uri:, chain_id:, nonce: nil, version: "1",
+                   scheme: nil, statement: nil, issued_at: nil,
+                   expiration_time: nil, not_before: nil, request_id: nil, resources: nil)
+      @warnings = []
+      @scheme = scheme
       @domain = domain
-      @address = address
+      @address = normalize_address(address)
+      @statement = statement
       @uri = uri
       @version = version
-      @statement = options.fetch :statement, ""
-      @issued_at = options.fetch :issued_at, Time.now.utc.iso8601
-      @nonce = options.fetch :nonce, Siwe::Util.generate_nonce
-      @chain_id = options.fetch :chain_id, 1
-      @expiration_time = options.fetch :expiration_time, ""
-      @not_before = options.fetch :not_before, ""
-      @request_id = options.fetch :request_id, ""
-      @resources = options.fetch :resources, []
-      validate
-    end
+      @chain_id = coerce_chain_id(chain_id)
+      @nonce = nonce || Util.generate_nonce
+      @issued_at = issued_at || Time.now.utc.iso8601
+      @expiration_time = expiration_time
+      @not_before = not_before
+      @request_id = request_id
+      @resources = resources
 
-    def self.from_message(msg)
-      message = msg.match SIWE_MESSAGE
-
-      raise Siwe::UnableToParseMessage unless message.to_s == msg
-
-      new(
-        message[:domain],
-        message[:address],
-        message[:uri],
-        message[:version],
-        {
-          statement: message[:statement],
-          issued_at: message[:issued_at],
-          nonce: message[:nonce],
-          chain_id: message[:chain_id].to_i,
-          expiration_time: message[:expiration_time],
-          not_before: message[:not_before],
-          request_id: message[:request_id],
-          resources: message[:resources]&.split("\n- ")&.drop(1)
-        }
-      )
-    end
-
-    def to_json_string
-      obj = {
-        domain: @domain,
-        address: Eth::Address.new(@address).to_s,
-        uri: @uri,
-        version: @version,
-        chain_id: @chain_id,
-        nonce: @nonce,
-        issued_at: @issued_at,
-        statement: @statement,
-        expiration_time: @expiration_time,
-        not_before: @not_before,
-        request_id: @request_id,
-        resources: @resources
-      }
-      obj.to_json
-    end
-
-    def self.from_json_string(str)
-      obj = JSON.parse str, { symbolize_names: true }
-      Siwe::Message.new(
-        obj[:domain],
-        obj[:address],
-        obj[:uri],
-        obj[:version], {
-          chain_id: obj[:chain_id],
-          nonce: obj[:nonce],
-          issued_at: obj[:issued_at],
-          statement: obj[:statement],
-          expiration_time: obj[:expiration_time],
-          not_before: obj[:not_before],
-          request_id: obj[:request_id],
-          resources: obj[:resources]
-        }
-      )
-    end
-
-    def validate
-      # check domain
-      raise Siwe::InvalidDomain unless @domain.match %r{[^/?#]*} || @domain.empty?
-
-      # check address EIP-55
-      raise Siwe::InvalidAddress unless Eth::Address.new(@address).to_s.eql? @address
-
-      # check uri
-      raise Siwe::InvalidURI unless URI.parse(@uri)
-
-      # check version
-      raise Siwe::InvalidMessageVersion unless @version == "1"
-
-      # check if the nonce is alphanumeric and bigger then 8 characters
-      raise Siwe::InvalidNonce unless @nonce.match(%r{[a-zA-Z0-9]{8,}})
-
-      # check issued_at format
-      begin
-        Time.iso8601(@issued_at)
-      rescue ArgumentError
-        raise Siwe::InvalidTimeFormat, "issued_at"
-      end
-
-      # check exp_time
-      begin
-        Time.iso8601(@expiration_time) unless @expiration_time.nil? || @expiration_time.empty?
-      rescue ArgumentError
-        raise Siwe::InvalidTimeFormat, "expiration_time"
-      end
-
-      # check not_before
-      begin
-        Time.iso8601(@not_before) unless @not_before.nil? || @not_before.empty?
-      rescue ArgumentError
-        raise Siwe::InvalidTimeFormat, "not_before"
-      end
-
-      # check resources
-      raise Siwe::InvalidURI unless @resources.nil? || @resources.empty? || @resources.each { |uri| URI.parse(uri) }
-    end
-
-    def verify(signature, domain, time, nonce)
-      raise Siwe::DomainMismatch unless domain.nil? || domain.eql?(@domain)
-
-      raise Siwe::NonceMismatch unless nonce.nil? || nonce.eql?(@nonce)
-
-      check_time = time.nil? ? Time.now.utc : Time.iso8601(time)
-
-      raise Siwe::ExpiredMessage if (!@expiration_time.nil? && !@expiration_time.empty?) && check_time > Time.iso8601(@expiration_time)
-
-      raise Siwe::NotValidMessage if (!@not_before.nil? && !@not_before.empty?) && check_time < Time.iso8601(@not_before)
-
-      raise Siwe::InvalidSignature if signature.nil? && signature.empty?
-
-      raise Siwe::InvalidAddress unless @address.eql?(Eth::Address.new(@address).to_s)
-
-      begin
-        pub_key = Eth::Signature.personal_recover prepare_message, signature
-        signature_address = Eth::Util.public_key_to_address pub_key
-      rescue StandardError
-        raise Siwe::InvalidSignature
-      end
-
-      raise Siwe::InvalidSignature unless signature_address.to_s.downcase.eql? @address.to_s.downcase
-
-      true
+      validate_required!
+      roundtrip_validate!
+      freeze
     end
 
     def prepare_message
-      greeting = "#{@domain} wants you to sign in with your Ethereum account:"
-      address = @address
-      statement = "\n#{@statement}\n"
+      header_prefix = @scheme ? "#{@scheme}://#{@domain}" : @domain
+      header = "#{header_prefix} wants you to sign in with your Ethereum account:"
 
-      header = [greeting, address]
+      prefix = "#{header}\n#{@address}"
+      prefix = if @statement.nil?
+                 "#{prefix}\n\n"
+               else
+                 "#{prefix}\n\n#{@statement}\n"
+               end
 
-      if @statement.nil? || @statement.empty?
-        header.push "\n"
-      else
-        header.push statement
+      suffix = "URI: #{@uri}\nVersion: #{@version}\nChain ID: #{@chain_id}"
+      suffix << "\nNonce: #{@nonce}"
+      suffix << "\nIssued At: #{@issued_at}" if @issued_at
+      suffix << "\nExpiration Time: #{@expiration_time}" if @expiration_time
+      suffix << "\nNot Before: #{@not_before}" if @not_before
+      suffix << "\nRequest ID: #{@request_id}" unless @request_id.nil?
+      if @resources
+        suffix << "\nResources:"
+        @resources.each { |r| suffix << "\n- #{r}" }
       end
 
-      header = header.join "\n"
+      "#{prefix}\n#{suffix}"
+    end
 
-      uri = "URI: #{@uri}"
-      version = "Version: #{@version}"
-      chain_id = "Chain ID: #{@chain_id}"
-      nonce = "Nonce: #{@nonce}"
-      issued_at = "Issued At: #{@issued_at}"
+    alias to_eip4361 prepare_message
+    alias to_s prepare_message
 
-      body = [uri, version, chain_id, nonce, issued_at]
+    # Verify a signature against this message and the verification params.
+    # Returns Siwe::Response — never raises on verification failure.
+    def verify(signature:, domain:, nonce:, scheme: nil, uri: nil, chain_id: nil,
+               request_id: nil, time: nil, config: nil, strict: false)
+      cfg = config || Siwe.config
 
-      expiration_time = "Expiration Time: #{@expiration_time}"
-      not_before = "Not Before: #{@not_before}"
-      request_id = "Request ID: #{@request_id}"
+      check_param_mismatches!(domain: domain, nonce: nonce, scheme: scheme,
+                              uri: uri, chain_id: chain_id, request_id: request_id, strict: strict)
+      check_temporal!(time)
+      check_signature!(signature, cfg)
 
-      body.push expiration_time unless @expiration_time.to_s.strip.empty?
+      Response.new(success: true, error: nil, data: self)
+    rescue Error => e
+      Response.new(success: false, error: e, data: self)
+    end
 
-      body.push not_before unless @not_before.to_s.strip.empty?
+    # Verify a signature; raises Siwe::Error on failure, returns self on success.
+    def verify!(**)
+      response = verify(**)
+      raise response.error if response.failure?
 
-      body.push request_id unless @request_id.to_s.strip.empty?
+      self
+    end
 
-      body.push "Resources:\n#{@resources.map { |x| "- #{x}" }.join "\n"}" unless @resources.nil? || @resources.empty?
+    def to_h
+      FIELDS.to_h { |f| [f, instance_variable_get("@#{f}")] }
+    end
 
-      body = body.join "\n"
+    def to_json(*)
+      to_h.to_json(*)
+    end
 
-      [header, body].join "\n"
+    def ==(other)
+      other.is_a?(Message) && to_h == other.to_h
+    end
+    alias eql? ==
+
+    def hash
+      to_h.hash
+    end
+
+    private
+
+    # rubocop:disable Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity, Metrics/AbcSize
+    def check_param_mismatches!(domain:, nonce:, scheme:, uri:, chain_id:, request_id:, strict:)
+      raise Error.new(ErrorType::MISSING_DOMAIN) if domain.nil? || domain.empty?
+      raise Error.new(ErrorType::MISSING_NONCE) if nonce.nil? || nonce.empty?
+
+      raise Error.new(ErrorType::DOMAIN_MISMATCH, expected: @domain, received: domain) if @domain != domain
+      if scheme && @scheme != scheme
+        raise Error.new(ErrorType::SCHEME_MISMATCH, expected: @scheme.to_s, received: scheme)
+      end
+      raise Error.new(ErrorType::NONCE_MISMATCH, expected: @nonce, received: nonce) if @nonce != nonce
+
+      raise Error.new(ErrorType::MISSING_URI) if strict && uri.nil?
+      raise Error.new(ErrorType::URI_MISMATCH, expected: @uri, received: uri) if uri && @uri != uri
+
+      raise Error.new(ErrorType::MISSING_CHAIN_ID) if strict && chain_id.nil?
+      if chain_id && @chain_id != chain_id
+        raise Error.new(ErrorType::CHAIN_ID_MISMATCH, expected: @chain_id.to_s, received: chain_id.to_s)
+      end
+
+      return unless request_id && @request_id != request_id
+
+      raise Error.new(ErrorType::REQUEST_ID_MISMATCH, expected: @request_id.to_s, received: request_id.to_s)
+    end
+    # rubocop:enable Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity, Metrics/AbcSize
+
+    def check_temporal!(time_str)
+      check_at = time_str ? Time.iso8601(time_str) : Time.now.utc
+      if @expiration_time && Time.iso8601(@expiration_time) < check_at
+        raise Error.new(ErrorType::EXPIRED_MESSAGE, expected: @expiration_time, received: check_at.iso8601)
+      end
+      return unless @not_before && Time.iso8601(@not_before) > check_at
+
+      raise Error.new(ErrorType::NOT_YET_VALID_MESSAGE, expected: @not_before, received: check_at.iso8601)
+    rescue ArgumentError => e
+      raise Error.new(ErrorType::INVALID_TIME_FORMAT, message: e.message)
+    end
+
+    def check_signature!(signature, cfg)
+      if signature.nil? || signature.empty?
+        raise Error.new(ErrorType::INVALID_SIGNATURE, expected: "non-empty signature", received: signature.inspect)
+      end
+
+      recovered = recover_eoa(signature, cfg)
+      return if recovered && recovered.downcase == @address.downcase
+
+      # EOA recovery failed or address mismatch — try smart-wallet path if configured.
+      return if smart_wallet_valid?(signature, cfg)
+
+      raise Error.new(ErrorType::INVALID_SIGNATURE, expected: @address, received: recovered.to_s)
+    end
+
+    def recover_eoa(signature, cfg)
+      cfg.adapter.verify_message(prepare_message, signature)
+    rescue StandardError
+      nil
+    end
+
+    def smart_wallet_valid?(signature, cfg)
+      rpc = resolve_rpc(cfg)
+      return false if rpc.nil?
+
+      check_chain_id_match!(rpc)
+      SmartWallet.verify(rpc: rpc, address: @address, message: prepare_message, signature: signature)
+    end
+
+    def resolve_rpc(cfg)
+      return cfg.rpc if cfg.rpc
+      return Rpc::HttpClient.new(cfg.rpc_url) if cfg.rpc_url
+
+      nil
+    end
+
+    def check_chain_id_match!(rpc)
+      return unless rpc.respond_to?(:chain_id)
+
+      rpc_chain = rpc.chain_id
+      return if rpc_chain.nil? || rpc_chain == @chain_id
+
+      raise Error.new(ErrorType::INVALID_SIGNATURE_CHAIN_ID,
+                      expected: @chain_id.to_s, received: rpc_chain.to_s)
+    end
+
+    def init_from_parser(result)
+      result[:fields].each { |k, v| instance_variable_set("@#{k}", v) }
+      @warnings = result[:warnings]
+      freeze
+    end
+
+    def normalize_address(addr)
+      raise Error.new(ErrorType::INVALID_ADDRESS, expected: "valid EIP-55 address", received: addr.to_s) if addr.nil?
+
+      case Util.address_case(addr)
+      when :checksum
+        addr
+      when :lower, :upper
+        @warnings << "address is not EIP-55 checksummed - #{addr}"
+        Util.checksum_address(addr) || addr
+      when :invalid_checksum
+        raise Error.new(ErrorType::INVALID_ADDRESS, expected: "valid EIP-55 address", received: addr)
+      else
+        raise Error.new(ErrorType::INVALID_ADDRESS, expected: "0x + 40 hex chars", received: addr.to_s)
+      end
+    end
+
+    def coerce_chain_id(value)
+      case value
+      when Integer then value
+      when String
+        unless value.match?(/\A\d+\z/)
+          raise Error.new(ErrorType::UNABLE_TO_PARSE, expected: "integer chain ID", received: value)
+        end
+
+        value.to_i
+      else
+        raise Error.new(ErrorType::UNABLE_TO_PARSE, expected: "integer chain ID", received: value.inspect)
+      end
+    end
+
+    def validate_required!
+      if @domain.nil? || @domain.to_s.empty?
+        raise Error.new(ErrorType::INVALID_DOMAIN, expected: "non-empty domain",
+                                                   received: @domain.inspect)
+      end
+      if @uri.nil? || @uri.to_s.empty?
+        raise Error.new(ErrorType::INVALID_URI, expected: "non-empty URI",
+                                                received: @uri.inspect)
+      end
+      unless @version == "1"
+        raise Error.new(ErrorType::INVALID_MESSAGE_VERSION, expected: "1",
+                                                            received: @version.to_s)
+      end
+      return if Parser::NONCE_REGEX.match?(@nonce.to_s)
+
+      raise Error.new(ErrorType::INVALID_NONCE, expected: "alphanumeric 8+ chars",
+                                                received: @nonce.to_s)
+    end
+
+    def roundtrip_validate!
+      Parser.parse(prepare_message)
+    rescue Error => e
+      raise Error.new(e.type, expected: e.expected, received: e.received,
+                              message: "Constructed message fails to parse: #{e.message}")
     end
   end
 end
