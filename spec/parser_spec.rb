@@ -151,11 +151,13 @@ RSpec.describe Siwe::Message do
       end
     end
 
+    # NOTE: in the shared vector suite, invalid_uris / invalid_resources are stored as
+    # `{name: raw_string}` rather than `{name: {msg: ..., ...}}` like the valid ones.
     %w[invalid_uris invalid_resources].each do |file|
       describe file do
-        load_vectors("grammar", file).each do |name, vec|
+        load_vectors("grammar", file).each do |name, msg|
           it name do
-            expect { Siwe::Message.parse(vec["msg"]) }.to raise_error(Siwe::Error)
+            expect { Siwe::Message.parse(msg) }.to raise_error(Siwe::Error)
           end
         end
       end

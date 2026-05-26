@@ -162,7 +162,7 @@ RSpec.describe Siwe::Message do
     end
 
     it "falls through to smart-wallet path when EOA recovery returns the wrong address" do
-      rpc = FakeRpc.new(result: "0x01")
+      rpc = FakeRpc.new(result: "0x01", chain_id: 1)
       cfg = Siwe::Config.new(rpc: rpc)
 
       msg.verify!(signature: "0x#{"ab" * 65}", domain: "localhost:4361", nonce: "FbYd6TNB4m0IUHDG7", config: cfg)
@@ -171,7 +171,7 @@ RSpec.describe Siwe::Message do
     end
 
     it "raises :invalid_signature when smart-wallet validator returns 0x00" do
-      rpc = FakeRpc.new(result: "0x#{"0" * 64}")
+      rpc = FakeRpc.new(result: "0x#{"0" * 64}", chain_id: 1)
       cfg = Siwe::Config.new(rpc: rpc)
 
       expect do
@@ -188,6 +188,26 @@ RSpec.describe Siwe::Message do
 
     it "raises :invalid_signature_chain_id when RPC chain doesn't match message chain" do
       rpc = FakeRpc.new(result: "0x01", chain_id: 137)
+      cfg = Siwe::Config.new(rpc: rpc)
+
+      expect do
+        msg.verify!(signature: "0x#{"ab" * 65}", domain: "localhost:4361", nonce: "FbYd6TNB4m0IUHDG7", config: cfg)
+      end.to raise_error(Siwe::Error) { |e| expect(e.type).to eq(:invalid_signature_chain_id) }
+    end
+
+    it "raises :invalid_signature_chain_id when RPC cannot report a chain id" do
+      rpc = FakeRpc.new(result: "0x01", chain_id: nil)
+      cfg = Siwe::Config.new(rpc: rpc)
+
+      expect do
+        msg.verify!(signature: "0x#{"ab" * 65}", domain: "localhost:4361", nonce: "FbYd6TNB4m0IUHDG7", config: cfg)
+      end.to raise_error(Siwe::Error) { |e| expect(e.type).to eq(:invalid_signature_chain_id) }
+    end
+
+    it "raises :invalid_signature_chain_id when RPC client does not expose chain_id at all" do
+      rpc = Class.new do
+        def eth_call(to:, data:, block: "latest") = "0x01" # rubocop:disable Lint/UnusedMethodArgument
+      end.new
       cfg = Siwe::Config.new(rpc: rpc)
 
       expect do

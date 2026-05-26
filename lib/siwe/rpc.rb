@@ -25,6 +25,11 @@ module Siwe
         @timeout = timeout
       end
 
+      # Returns the chain id (Integer). Lazy-fetched via eth_chainId on first call and
+      # cached for the lifetime of this client. Raises Siwe::Error :rpc_error on probe
+      # failure rather than returning nil — callers in the smart-wallet path rely on
+      # this to enforce ERC-4361's chain binding (a silent nil could otherwise validate
+      # a signature against the wrong chain).
       def chain_id
         @chain_id ||= fetch_chain_id
       end
@@ -41,10 +46,7 @@ module Siwe
       private
 
       def fetch_chain_id
-        hex = rpc_request("eth_chainId", [])
-        hex.to_i(16)
-      rescue Error
-        nil
+        rpc_request("eth_chainId", []).to_i(16)
       end
 
       def rpc_request(method, params)

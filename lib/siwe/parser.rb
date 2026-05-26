@@ -10,18 +10,17 @@ module Siwe
   # Returns a hash of typed fields plus an array of non-fatal warnings.
   class Parser
     HEADER_SUFFIX = " wants you to sign in with your Ethereum account:"
-    SCHEME_REGEX  = /\A([A-Za-z][A-Za-z0-9+\-.]*)\z/
-    # RFC 3986 authority (without scheme://) — userinfo, host (reg-name/IPv4/IP-literal), port.
-    DOMAIN_REGEX  = /\A[A-Za-z0-9\-._~%!$&'()*+,;=:@\[\]]+\z/
+    SCHEME_REGEX  = Util::SCHEME_REGEX
     ADDRESS_REGEX = /\A0x[0-9a-fA-F]{40}\z/
     NONCE_REGEX   = /\A[A-Za-z0-9]{8,}\z/
     CHAIN_REGEX   = /\A[0-9]+\z/
-    # Statement chars per ABNF: %d32-33 %d35-36 %d38-59 %d61 %d63-64 %d91 %d93 %d95 %d126.
-    # Note: explicitly excludes %d34 (") and %d37 (%). Built via Regexp.new to avoid
-    # accidental string interpolation of `#$&` inside a regex literal.
+    # ERC-4361 statement = reserved / unreserved / " " per RFC 3986. The regex unions
+    # ALPHA + DIGIT with the punctuation in those sets; excludes LF, ", %, and other
+    # characters outside RFC 3986. Built via Regexp.new to avoid accidental string
+    # interpolation of `#$&` inside a regex literal.
     STATEMENT_REGEX = Regexp.new('\A[a-zA-Z0-9 !\x23\x24\x26-\x3B\x3D\x3F\x40\x5B\x5D\x5F\x7E]*\z')
-    REQUEST_ID_REGEX = %r{\A[A-Za-z0-9\-._~%!$&'()*+,;=:@/?]*\z}
-    URI_REGEX = /\A[A-Za-z][A-Za-z0-9+\-.]*:[^\s]*\z/
+    # request-id = *pchar per ABNF — no "/" or "?".
+    REQUEST_ID_REGEX = Util::PCHAR_REGEX
 
     def self.parse(str)
       new(str).parse
@@ -46,7 +45,7 @@ module Siwe
 
       statement = parse_statement_block(lines[2...uri_idx])
 
-      uri        = parse_field(lines[uri_idx],     "URI: ",       :invalid_uri,             URI_REGEX)
+      uri        = parse_uri_field(lines[uri_idx], "URI: ")
       version    = parse_field(lines[uri_idx + 1], "Version: ",   :invalid_message_version, /\A1\z/)
       chain_str  = parse_field(lines[uri_idx + 2], "Chain ID: ",  :unable_to_parse,         CHAIN_REGEX)
       nonce      = parse_field(lines[uri_idx + 3], "Nonce: ",     :invalid_nonce,           NONCE_REGEX)
@@ -101,7 +100,7 @@ module Siwe
 
     private
 
-    def parse_header(line) # rubocop:disable Metrics/AbcSize
+    def parse_header(line)
       raise unable_to_parse("missing header") if line.nil? || line.empty?
       raise unable_to_parse("malformed header") unless line.end_with?(HEADER_SUFFIX)
 
@@ -112,20 +111,20 @@ module Siwe
         scheme, _, domain = prefix.partition("://")
         raise unable_to_parse("invalid scheme: #{scheme.inspect}") unless SCHEME_REGEX.match?(scheme)
         raise unable_to_parse("empty domain") if domain.empty?
-        unless DOMAIN_REGEX.match?(domain)
-          raise Error.new(ErrorType::INVALID_DOMAIN, expected: "RFC 3986 authority",
-                                                     received: domain)
-        end
 
+        validate_domain!(domain)
         [scheme, domain]
       else
-        unless DOMAIN_REGEX.match?(prefix)
-          raise Error.new(ErrorType::INVALID_DOMAIN, expected: "RFC 3986 authority",
-                                                     received: prefix)
-        end
-
+        validate_domain!(prefix)
         [nil, prefix]
       end
+    end
+
+    def validate_domain!(domain)
+      return if Util.valid_authority?(domain) && !domain.empty?
+
+      raise Error.new(ErrorType::INVALID_DOMAIN, expected: "RFC 3986 authority",
+                                                 received: domain)
     end
 
     def parse_address(line)
@@ -188,12 +187,22 @@ module Siwe
       value
     end
 
+    def parse_uri_field(line, prefix)
+      raise unable_to_parse("missing #{prefix.strip}") if line.nil?
+      raise unable_to_parse("expected #{prefix.strip} line") unless line.start_with?(prefix)
+
+      value = line[prefix.length..]
+      raise Error.new(ErrorType::INVALID_URI, expected: "RFC 3986 URI", received: value) unless Util.valid_uri?(value)
+
+      value
+    end
+
     def parse_resources(lines, start_idx)
       idx = start_idx
       out = []
       while idx < lines.length && lines[idx].start_with?("- ")
         uri = lines[idx][2..]
-        unless URI_REGEX.match?(uri)
+        unless Util.valid_uri?(uri)
           raise Error.new(ErrorType::INVALID_URI, expected: "RFC 3986 resource URI", received: uri)
         end
 

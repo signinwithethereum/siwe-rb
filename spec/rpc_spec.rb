@@ -98,10 +98,10 @@ RSpec.describe Siwe::Rpc::HttpClient do
       expect(client.chain_id).to eq(1)
     end
 
-    it "returns nil when the RPC fails (best-effort)" do
+    it "raises Siwe::Error :rpc_error when the eth_chainId probe fails" do
       stub_request(:post, url).to_raise(Errno::ECONNREFUSED)
 
-      expect(client.chain_id).to be_nil
+      expect { client.chain_id }.to raise_error(Siwe::Error) { |e| expect(e.type).to eq(:rpc_error) }
     end
   end
 

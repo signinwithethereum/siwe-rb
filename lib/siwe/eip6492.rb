@@ -10,9 +10,6 @@ module Siwe
     # 32-byte magic suffix appended to EIP-6492 wrapped signatures.
     MAGIC_SUFFIX = "6492649264926492649264926492649264926492649264926492649264926492"
 
-    # ERC-1271 magic value returned by `isValidSignature(bytes32,bytes)`.
-    EIP1271_MAGIC_VALUE = "1626ba7e"
-
     # Off-chain universal signature validator. Deployed via eth_call (no actual
     # deployment) to verify EOA, ERC-1271, and EIP-6492 signatures in one call.
     #

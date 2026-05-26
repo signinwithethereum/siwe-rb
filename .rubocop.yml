@@ -31,6 +31,9 @@ Metrics/AbcSize:
 Metrics/ClassLength:
   Max: 250
 
+Metrics/ModuleLength:
+  Max: 200
+
 Metrics/BlockLength:
   Exclude:
     - "spec/**/*"

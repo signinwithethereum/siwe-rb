@@ -140,4 +140,4 @@ SIWE_RPC_URL=https://ethereum-rpc.publicnode.com bundle exec rspec --tag live_rp
 
 ## License
 
-MIT or Apache-2.0, at your option.
+MIT.

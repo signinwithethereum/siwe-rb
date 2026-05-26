@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0] — 2026-05-26
+
+Spec-conformance pass. Several behaviour changes; the only one that breaks API contract is the strict chain-id requirement on the smart-wallet path (3).
+
+1. **RFC 3986 enforcement for `domain`, `URI`, and resource URIs.** The previous regexes accepted malformed authorities (`example.com:abc`), IP-literal hosts with invalid IPv4 octets (`uri://[::0.0.0.256]/p`), and URI characters outside RFC 3986 (`https://example.com/path?q=one|two`). The shared test-vector suite's `invalid_uris` / `invalid_resources` grammar cases were silently passing because the spec wrapper called `vec["msg"]` on raw-string entries; both the parser and the spec are fixed.
+2. **Expiration boundary now matches sibling implementations.** A message is rejected at the exact `Expiration Time` (not one instant after), aligning with TypeScript / Python / Rust.
+3. **Smart-wallet chain binding is enforced, not best-effort.** ERC-4361 requires ERC-1271 verification to happen on the chain matching the message's `Chain ID`. Previously, an RPC that lacked `chain_id` or whose `eth_chainId` probe failed would silently skip the check. Now `:invalid_signature_chain_id` is raised in either case. **Breaking** for callers using a custom RPC client without a `chain_id` method, or relying on `chain_id` returning `nil` on probe failure.
+4. **`request-id` field tightened to `*pchar`.** The parser previously accepted `/` and `?` (ABNF query/fragment characters) which are not pchar.
+5. **Empty / nil signatures now raise `:invalid_params`** instead of `:invalid_signature` — same `Siwe::Error` class, more specific type.
+6. **Narrower `rescue` in EOA recovery.** Adapter misconfiguration no longer disappears behind `:invalid_signature`; only `eth`-gem signature/chain errors and arg/type errors are swallowed.
+7. **Removed unused public surface.** `Config#verification_fallback`, `Eip6492::EIP1271_MAGIC_VALUE`, and `Adapter::EthGem#{hash_message,get_address}` are gone. None were called anywhere.
+
 ## [0.1.2] — 2026-05-04
 
 - Add top-level convenience methods `Siwe.parse(str)` (alias for `Siwe::Message.parse`) and `Siwe.eip6492_signature?(hex)` (alias for `Siwe::Eip6492.signature?`), mirroring the TS package's root-level exports.

@@ -156,7 +156,9 @@ module Siwe
 
     def check_temporal!(time_str)
       check_at = time_str ? Time.iso8601(time_str) : Time.now.utc
-      if @expiration_time && Time.iso8601(@expiration_time) < check_at
+      # `expiration-time` is the instant the message becomes invalid (ERC-4361). Reject at
+      # the boundary too — matches TS/Python/Rust which all use check_time >= expiration.
+      if @expiration_time && Time.iso8601(@expiration_time) <= check_at
         raise Error.new(ErrorType::EXPIRED_MESSAGE, expected: @expiration_time, received: check_at.iso8601)
       end
       return unless @not_before && Time.iso8601(@not_before) > check_at
@@ -167,8 +169,8 @@ module Siwe
     end
 
     def check_signature!(signature, cfg)
-      if signature.nil? || signature.empty?
-        raise Error.new(ErrorType::INVALID_SIGNATURE, expected: "non-empty signature", received: signature.inspect)
+      if signature.nil? || signature.to_s.empty?
+        raise Error.new(ErrorType::INVALID_PARAMS, expected: "non-empty signature", received: signature.inspect)
       end
 
       recovered = recover_eoa(signature, cfg)
@@ -180,9 +182,21 @@ module Siwe
       raise Error.new(ErrorType::INVALID_SIGNATURE, expected: @address, received: recovered.to_s)
     end
 
+    # Errors specific to signature recovery failures from the `eth` gem. Other
+    # exceptions (e.g. an adapter raising on misconfiguration, network errors)
+    # are intentionally not rescued — they signal programmer error or transport
+    # failure, not "this signature is bad".
+    EOA_RECOVERY_ERRORS = [
+      Eth::Signature::SignatureError,
+      Eth::Chain::ReplayProtectionError,
+      ArgumentError,
+      TypeError
+    ].freeze
+    private_constant :EOA_RECOVERY_ERRORS
+
     def recover_eoa(signature, cfg)
       cfg.adapter.verify_message(prepare_message, signature)
-    rescue StandardError
+    rescue *EOA_RECOVERY_ERRORS
       nil
     end
 
@@ -201,11 +215,24 @@ module Siwe
       nil
     end
 
+    # ERC-4361 requires ERC-1271 verification to happen on the chain matching the
+    # message's `Chain ID`. We refuse to fall back to the smart-wallet path unless
+    # the RPC reports a chain id and it matches. A custom RPC client that does not
+    # expose chain_id must add it; a silent skip here would let an attacker validate
+    # against any chain a misconfigured RPC happens to be pointed at.
     def check_chain_id_match!(rpc)
-      return unless rpc.respond_to?(:chain_id)
+      unless rpc.respond_to?(:chain_id)
+        raise Error.new(ErrorType::INVALID_SIGNATURE_CHAIN_ID,
+                        expected: @chain_id.to_s,
+                        received: "rpc client does not expose chain_id")
+      end
 
       rpc_chain = rpc.chain_id
-      return if rpc_chain.nil? || rpc_chain == @chain_id
+      if rpc_chain.nil?
+        raise Error.new(ErrorType::INVALID_SIGNATURE_CHAIN_ID,
+                        expected: @chain_id.to_s, received: "nil")
+      end
+      return if rpc_chain == @chain_id
 
       raise Error.new(ErrorType::INVALID_SIGNATURE_CHAIN_ID,
                       expected: @chain_id.to_s, received: rpc_chain.to_s)
